@@ -8,7 +8,7 @@ TODO
 var assign = require('object-assign');
 var debug = require('debug')('keystone-s3');
 var ensureCallback = require('keystone-storage-namefunctions/ensureCallback');
-var knox = require('knox');
+var AWS = require("aws-sdk");
 var nameFunctions = require('keystone-storage-namefunctions');
 var pathlib = require('path');
 
@@ -40,8 +40,18 @@ function S3Adapter (options, schema) {
 		this.options.headers = this.options.defaultHeaders;
 	}
 
-	// Knox will check for the 'key', 'secret' and 'bucket' options.
-	this.client = knox.createClient(this.options);
+	// TODO: check for the 'key', 'secret' and 'bucket' options.
+	
+	this.client = new AWS.S3({
+		params: {
+			// included in every call, but may be overriden
+			Bucket: this.options.bucket,
+			ACL: this.options.acl
+		},
+		accessKeyId: this.options.key,
+		secretAccessKey: this.options.secret,
+		region: this.options.region
+	});
 
 	// If path is specified it must be absolute.
 	if (options.path != null && !pathlib.isAbsolute(options.path)) {
@@ -104,42 +114,43 @@ S3Adapter.prototype.uploadFile = function (file, callback) {
 		// The destination path inside the S3 bucket.
 		file.path = self.options.path;
 		file.filename = filename;
-		var destpath = self._resolveFilename(file);
+		var destpath = self._resolveFilename(file).slice(1);
+		fs.readFile(localpath, function(err, fileData) {
+			if (err) return callback(new Error("Read File Error: " + err.message));
+			var params = {
+				ContentLength: file.size,
+				ContentType: file.mimetype,
+				Body: fileData,
+				Key: destpath
+			};
 
-		// Figure out headers
-		var headers = assign({}, self.options.headers, {
-			'Content-Length': file.size,
-			'Content-Type': file.mimetype,
-		});
+			debug('Uploading file %s', filename);
+			self.client.putObject(params, function (err, data) {
+				if (err)
+					return callback(new Error("Upload Error: " + err.message));
 
-		debug('Uploading file %s', filename);
-		self.client.putFile(localpath, destpath, headers, function (err, res) {
-			if (err) return callback(err);
-			if (res.statusCode !== 200) {
-				return callback(new Error('Amazon returned status code: ' + res.statusCode));
-			}
-			res.resume(); // Discard (empty) body.
 
-			// We'll annotate the file with a bunch of extra properties. These won't
-			// be saved in the database unless the corresponding schema options are
-			// set.
-			file.filename = filename;
-			file.etag = res.headers.etag; // TODO: This etag is double-quoted (??why?)
+				// We'll annotate the file with a bunch of extra properties. These won't
+				// be saved in the database unless the corresponding schema options are
+				// set.
+				file.filename = filename;
+				file.etag = data.ETag; 
 
-			// file.url is automatically populated by keystone's Storage class so we
-			// don't need to set it here.
+				// file.url is automatically populated by keystone's Storage class so we
+				// don't need to set it here.
 
-			// The path and bucket can be stored on a per-file basis if you want.
-			// The effect of this is that you can have some (eg, old) files in your
-			// collection stored in different bucket / different path inside your
-			// bucket. This means you can do slow data migrations. Note that if you
-			// *don't* store these values you can arguably migrate your data more
-			// easily - just move it all, reconfigure and restart your server.
-			file.path = self.options.path;
-			file.bucket = self.options.bucket;
+				// The path and bucket can be stored on a per-file basis if you want.
+				// The effect of this is that you can have some (eg, old) files in your
+				// collection stored in different bucket / different path inside your
+				// bucket. This means you can do slow data migrations. Note that if you
+				// *don't* store these values you can arguably migrate your data more
+				// easily - just move it all, reconfigure and restart your server.
+				file.path = self.options.path;
+				file.bucket = self.options.bucket;
 
-			debug('file upload successful');
-			callback(null, file);
+				debug('file upload successful');
+				callback(null, file);
+			});
 		});
 	});
 };
@@ -150,9 +161,21 @@ S3Adapter.prototype.uploadFile = function (file, callback) {
 // - the file is set to a canned ACL (ie, headers:{ 'x-amz-acl': 'public-read' } )
 // - you pass credentials during your request for the file content itself
 S3Adapter.prototype.getFileURL = function (file) {
-	// Consider providing an option to use insecure http. I can't think of any
-	// sensible use case for plain http though. https should be used everywhere.
-	return this._knoxForFile(file).https(this._resolveFilename(file));
+	if(this.options.region.indexOf("cn-north") != -1)
+		return (
+			"https://s3." +
+			(this.options.region) +
+			".amazonaws.com.cn/" + (file.bucket ||this.options.bucket) + 
+			this._resolveFilename(file)
+		);
+	else
+		return (
+			"https://" +
+			(file.bucket || this.options.bucket) +
+			".s3.amazonaws.com" +
+			this._resolveFilename(file)
+		);
+	// return this._knoxForFile(file).https(this._resolveFilename(file));
 };
 
 S3Adapter.prototype.removeFile = function (file, callback) {
