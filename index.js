@@ -11,6 +11,7 @@ var ensureCallback = require('keystone-storage-namefunctions/ensureCallback');
 var AWS = require("aws-sdk");
 var nameFunctions = require('keystone-storage-namefunctions');
 var pathlib = require('path');
+var fs = require("fs");
 
 var DEFAULT_OPTIONS = {
 	key: process.env.S3_KEY,
