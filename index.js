@@ -180,28 +180,30 @@ S3Adapter.prototype.getFileURL = function (file) {
 };
 
 S3Adapter.prototype.removeFile = function (file, callback) {
-	var fullpath = this._resolveFilename(file);
-	this._knoxForFile(file).deleteFile(fullpath, function (err, res) {
-		if (err) return callback(err);
-		// Deletes return 204 according to the spec, but we'll allow 200 too:
-		// http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectDELETE.html
-		if (res.statusCode !== 200 && res.statusCode !== 204) {
-			return callback(Error('Amazon returned status code ' + res.statusCode));
-		}
-		res.resume(); // Discard the body
-		callback();
-	});
+	var param = {
+		Bucket: this.options.bucket,
+		Key: file.path.slice("1") + file.filename
+	}
+	this.client.deleteObject(param, function (err,data){
+		if(err)
+			return callback(Error('Delete Error: ' + err));
+		else	
+			callback();
+	})
 };
 
 // Check if a file with the specified filename already exists. Callback called
 // with the file headers if the file exists, null otherwise.
 S3Adapter.prototype.fileExists = function (filename, callback) {
-	var fullpath = this._resolveFilename({ filename: filename });
-	this.client.headFile(fullpath, function (err, res) {
+	var param = {
+		Bucket: this.options.bucket,
+		Key: (this.options.path || "/").slice(1) + filename
+	};
+	self.client.headObject(param, function(err, data) {
 		if (err) return callback(err);
 
-		if (res.statusCode === 404) return callback(); // File does not exist
-		callback(null, res.headers);
+		if (!data) return callback(); // File does not exist
+		callback(null, data);
 	});
 };
 
